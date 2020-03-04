@@ -1,0 +1,14 @@
+[package]
+name = "async-notify"
+version = "0.1.0"
+authors = ["Sherlock Holo <sherlockya@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-std = { version = "1.5", features = ["unstable"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+async-std = { version = "1.5", features = ["unstable", "attributes"] }
