@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Sherlock Holo <sherlockya@gmail.com>"]
 edition = "2018"
 license = "MIT"
+repository = "https://github.com/Sherlock-Holo/async-notify"
+description = "An `async-std` version Notify, like `tokio` Notify but implement Clone."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
