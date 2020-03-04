@@ -1,4 +1,4 @@
-//! An async-std version Notify, like tokio Notify but implement Clone.
+//! An `async-std` version Notify, like `tokio` Notify but implement Clone.
 
 use async_std::sync::{channel, Receiver, Sender};
 use futures_util::select;
