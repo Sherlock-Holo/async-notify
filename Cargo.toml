@@ -1,6 +1,6 @@
 [package]
 name = "async-notify"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Sherlock Holo <sherlockya@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -11,7 +11,8 @@ description = "An `async-std` version Notify, like `tokio` Notify but implement 
 
 [dependencies]
 async-std = { version = "1.5", features = ["unstable"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 async-std = { version = "1.5", features = ["unstable", "attributes"] }
+futures-util = "0.3"

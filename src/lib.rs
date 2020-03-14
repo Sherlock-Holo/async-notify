@@ -1,8 +1,11 @@
 //! An `async-std` version Notify, like `tokio` Notify but implement Clone.
 
+use std::future::Future;
+use std::task::Context;
+
 use async_std::sync::{channel, Receiver, Sender};
-use futures_util::select;
-use futures_util::FutureExt;
+use futures_util::pin_mut;
+use futures_util::task::noop_waker;
 
 /// Notify a single task to wake up.
 ///
@@ -88,11 +91,12 @@ impl Notify {
     ///     notify.notify();
     /// }
     /// ```
+    #[inline]
     pub fn notify(&self) {
-        select! {
-            _ = self.sender.send(()).fuse() => (),
-            default => (),
-        }
+        let future = self.sender.send(());
+        pin_mut!(future);
+
+        let _ = future.poll(&mut Context::from_waker(&noop_waker()));
     }
 
     /// Wait for a notification.
@@ -123,6 +127,7 @@ impl Notify {
     ///     notify.notify();
     /// }
     /// ```
+    #[inline]
     pub async fn notified(&self) {
         // Option never be None because sender and receiver always stay together.
         self.receiver.recv().await;
