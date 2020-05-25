@@ -1,11 +1,8 @@
-//! An `async-std` version Notify, like `tokio` Notify but implement Clone.
+//! A general version async Notify, like `tokio` Notify but can work with any async runtime.
 
-use std::future::Future;
-use std::task::Context;
-
-use async_std::sync::{channel, Receiver, Sender};
-use futures_util::pin_mut;
-use futures_util::task::noop_waker;
+use futures_channel::mpsc::{channel, Receiver, Sender};
+use futures_util::lock::Mutex;
+use futures_util::StreamExt;
 
 /// Notify a single task to wake up.
 ///
@@ -29,11 +26,12 @@ use futures_util::task::noop_waker;
 /// Basic usage.
 ///
 /// ```
+/// use std::sync::Arc;
 /// use async_notify::Notify;
 ///
 /// #[async_std::main]
 /// async fn main() {
-///     let notify = Notify::new();
+///     let notify = Arc::new(Notify::new());
 ///     let notify2 = notify.clone();
 ///
 ///     async_std::task::spawn(async move {
@@ -45,17 +43,21 @@ use futures_util::task::noop_waker;
 ///     notify.notify();
 /// }
 /// ```
+#[derive(Debug)]
 pub struct Notify {
     sender: Sender<()>,
-    receiver: Receiver<()>,
+    receiver: Mutex<Receiver<()>>,
 }
 
-/// Like tokio Notify, this is a async-std version Notify and implement Clone.
+/// Like tokio Notify, this is a async-std version Notify.
 impl Notify {
     pub fn new() -> Self {
         let (sender, receiver) = channel(1);
 
-        Self { sender, receiver }
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+        }
     }
 
     /// Notifies a waiting task
@@ -75,11 +77,12 @@ impl Notify {
     /// # Examples
     ///
     /// ```
+    /// use std::sync::Arc;
     /// use async_notify::Notify;
     ///
     /// #[async_std::main]
     /// async fn main() {
-    ///     let notify = Notify::new();
+    ///     let notify = Arc::new(Notify::new());
     ///     let notify2 = notify.clone();
     ///
     ///     async_std::task::spawn(async move {
@@ -93,10 +96,7 @@ impl Notify {
     /// ```
     #[inline]
     pub fn notify(&self) {
-        let future = self.sender.send(());
-        pin_mut!(future);
-
-        let _ = future.poll(&mut Context::from_waker(&noop_waker()));
+        let _ = self.sender.clone().try_send(());
     }
 
     /// Wait for a notification.
@@ -111,11 +111,12 @@ impl Notify {
     /// # Examples
     ///
     /// ```
+    /// use std::sync::Arc;
     /// use async_notify::Notify;
     ///
     /// #[async_std::main]
     /// async fn main() {
-    ///     let notify = Notify::new();
+    ///     let notify = Arc::new(Notify::new());
     ///     let notify2 = notify.clone();
     ///
     ///     async_std::task::spawn(async move {
@@ -130,7 +131,12 @@ impl Notify {
     #[inline]
     pub async fn notified(&self) {
         // Option never be None because sender and receiver always stay together.
-        self.receiver.recv().await;
+        self.receiver
+            .lock()
+            .await
+            .next()
+            .await
+            .expect("sender is dropeed");
     }
 }
 
@@ -140,17 +146,10 @@ impl Default for Notify {
     }
 }
 
-impl Clone for Notify {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            receiver: self.receiver.clone(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures_util::select;
     use futures_util::FutureExt;
 
@@ -158,14 +157,14 @@ mod tests {
 
     #[async_std::test]
     async fn test() {
-        let notify = Notify::new();
+        let notify = Arc::new(Notify::new());
         let notify2 = notify.clone();
 
         notify.notify();
 
         select! {
             _ = notify2.notified().fuse() => (),
-            default => panic!("should be notified")
+            default => unreachable!("should be notified")
         }
     }
 }
