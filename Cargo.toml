@@ -11,7 +11,7 @@ description = "A general version async Notify, like `tokio` Notify but can work 
 
 [dependencies]
 futures-util = "0.3"
-futures-channel = { version = "0.3", features = ["sink"] }
+futures-channel = "0.3"
 
 [dev-dependencies]
-async-std = { version = "1.6", features = ["unstable", "attributes"] }
+async-std = { version = "1.6", features = ["attributes"] }

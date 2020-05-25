@@ -1,7 +1,11 @@
 //! A general version async Notify, like `tokio` Notify but can work with any async runtime.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use futures_channel::mpsc::{channel, Receiver, Sender};
 use futures_util::lock::Mutex;
+use futures_util::stream::Stream;
 use futures_util::StreamExt;
 
 /// Notify a single task to wake up.
@@ -146,6 +150,18 @@ impl Default for Notify {
     }
 }
 
+impl Stream for Notify {
+    type Item = ();
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(mut receiver) = self.receiver.try_lock() {
+            receiver.poll_next_unpin(cx)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -166,5 +182,14 @@ mod tests {
             _ = notify2.notified().fuse() => (),
             default => unreachable!("should be notified")
         }
+    }
+
+    #[async_std::test]
+    async fn stream() {
+        let mut notify = Notify::new();
+
+        notify.notify();
+
+        assert!(notify.next().await.is_some());
     }
 }
