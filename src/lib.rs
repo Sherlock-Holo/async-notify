@@ -198,7 +198,7 @@ impl<T: Deref<Target = Notify>> Stream for NotifyStream<T> {
 mod tests {
     use std::sync::Arc;
 
-    use futures_util::StreamExt;
+    use futures_util::{select, FutureExt, StreamExt};
 
     use super::*;
 
@@ -216,6 +216,34 @@ mod tests {
 
             println!("received notification");
             notify.notified().await;
+        })
+    }
+
+    #[test]
+    fn test_multi_notify() {
+        async_global_executor::block_on(async {
+            let notify = Arc::new(Notify::new());
+            let notify2 = notify.clone();
+
+            notify.notify();
+            notify.notify();
+
+            select! {
+                _ = notify2.notified().fuse() => {}
+                default => unreachable!("there should be notified")
+            }
+
+            select! {
+                _ = notify2.notified().fuse() => unreachable!("there should not be notified"),
+                default => {}
+            }
+
+            notify.notify();
+
+            select! {
+                _ = notify2.notified().fuse() => {}
+                default => unreachable!("there should be notified")
+            }
         })
     }
 
