@@ -1,12 +1,14 @@
 //! A general version async Notify, like `tokio` Notify but can work with any async runtime.
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::future::Future;
+use std::ops::Deref;
+use std::pin::{pin, Pin};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{ready, Context, Poll};
 
-use futures_channel::mpsc::{channel, Receiver, Sender};
-use futures_util::lock::Mutex;
-use futures_util::stream::Stream;
-use futures_util::StreamExt;
+use event_listener::{Event, EventListener};
+use futures_core::Stream;
+use pin_project_lite::pin_project;
 
 /// Notify a single task to wake up.
 ///
@@ -33,34 +35,32 @@ use futures_util::StreamExt;
 /// use std::sync::Arc;
 /// use async_notify::Notify;
 ///
-/// #[async_std::main]
-/// async fn main() {
-///     let notify = Arc::new(Notify::new());
-///     let notify2 = notify.clone();
+/// async_global_executor::block_on(async {
+///    let notify = Arc::new(Notify::new());
+///    let notify2 = notify.clone();
 ///
-///     async_std::task::spawn(async move {
-///         notify2.notified().await;
-///         println!("received notification");
-///     });
+///    async_global_executor::spawn(async move {
+///        notify2.notify();
+///        println!("sent notification");
+///    })
+///    .detach();
 ///
-///     println!("sending notification");
-///     notify.notify();
-/// }
+///    println!("received notification");
+///    notify.notified().await;
+/// })
 /// ```
 #[derive(Debug)]
 pub struct Notify {
-    sender: Sender<()>,
-    receiver: Mutex<Receiver<()>>,
+    count: AtomicBool,
+    event: Event,
 }
 
-/// Like tokio Notify, this is a async-std version Notify.
+/// Like tokio Notify, this is a runtime independent Notify.
 impl Notify {
     pub fn new() -> Self {
-        let (sender, receiver) = channel(1);
-
         Self {
-            sender,
-            receiver: Mutex::new(receiver),
+            count: Default::default(),
+            event: Default::default(),
         }
     }
 
@@ -84,23 +84,24 @@ impl Notify {
     /// use std::sync::Arc;
     /// use async_notify::Notify;
     ///
-    /// #[async_std::main]
-    /// async fn main() {
-    ///     let notify = Arc::new(Notify::new());
-    ///     let notify2 = notify.clone();
+    /// async_global_executor::block_on(async {
+    ///    let notify = Arc::new(Notify::new());
+    ///    let notify2 = notify.clone();
     ///
-    ///     async_std::task::spawn(async move {
-    ///         notify2.notified().await;
-    ///         println!("received notification");
-    ///     });
+    ///    async_global_executor::spawn(async move {
+    ///        notify2.notify();
+    ///        println!("sent notification");
+    ///    })
+    ///    .detach();
     ///
-    ///     println!("sending notification");
-    ///     notify.notify();
-    /// }
+    ///    println!("received notification");
+    ///    notify.notified().await;
+    /// })
     /// ```
     #[inline]
     pub fn notify(&self) {
-        let _ = self.sender.clone().try_send(());
+        self.count.store(true, Ordering::Release);
+        self.event.notify(1);
     }
 
     /// Wait for a notification.
@@ -110,37 +111,28 @@ impl Notify {
     /// immediately, consuming that permit. Otherwise, `notified().await` waits
     /// for a permit to be made available by the next call to `notify()`.
     ///
+    /// This method is cancel safety.
+    ///
     /// [`notify()`]: Notify::notify
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use async_notify::Notify;
-    ///
-    /// #[async_std::main]
-    /// async fn main() {
-    ///     let notify = Arc::new(Notify::new());
-    ///     let notify2 = notify.clone();
-    ///
-    ///     async_std::task::spawn(async move {
-    ///         notify2.notified().await;
-    ///         println!("received notification");
-    ///     });
-    ///
-    ///     println!("sending notification");
-    ///     notify.notify();
-    /// }
-    /// ```
     #[inline]
     pub async fn notified(&self) {
-        // Option never be None because sender and receiver always stay together.
-        self.receiver
-            .lock()
-            .await
-            .next()
-            .await
-            .expect("sender is dropeed");
+        loop {
+            if self.fast_path() {
+                return;
+            }
+
+            let listener = EventListener::new();
+            let mut listener = pin!(listener);
+            listener.as_mut().listen(&self.event);
+
+            listener.await;
+        }
+    }
+
+    fn fast_path(&self) -> bool {
+        self.count
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 }
 
@@ -150,14 +142,54 @@ impl Default for Notify {
     }
 }
 
-impl Stream for Notify {
+pin_project! {
+    /// A [`Stream`](Stream) [`Notify`] wrapper
+    pub struct NotifyStream<T: Deref<Target=Notify>> {
+        #[pin]
+        notify: T,
+        listener: Option<Pin<Box<EventListener>>>,
+    }
+}
+
+impl<T: Deref<Target = Notify>> NotifyStream<T> {
+    /// Create [`NotifyStream`] from `T`
+    pub fn new(notify: T) -> Self {
+        Self {
+            notify,
+            listener: None,
+        }
+    }
+}
+
+impl<T: Deref<Target = Notify>> AsRef<Notify> for NotifyStream<T> {
+    fn as_ref(&self) -> &Notify {
+        self.notify.deref()
+    }
+}
+
+impl<T: Deref<Target = Notify>> Stream for NotifyStream<T> {
     type Item = ();
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(mut receiver) = self.receiver.try_lock() {
-            receiver.poll_next_unpin(cx)
-        } else {
-            Poll::Pending
+        let this = self.project();
+        let notify = this.notify.deref();
+
+        loop {
+            if notify.fast_path() {
+                return Poll::Ready(Some(()));
+            }
+
+            let listener = match this.listener.as_mut() {
+                None => {
+                    let listener = notify.event.listen();
+                    this.listener.replace(listener);
+                    this.listener.as_mut().unwrap()
+                }
+                Some(listener) => listener,
+            };
+
+            ready!(listener.as_mut().poll(cx));
+            this.listener.take();
         }
     }
 }
@@ -166,30 +198,40 @@ impl Stream for Notify {
 mod tests {
     use std::sync::Arc;
 
-    use futures_util::select;
-    use futures_util::FutureExt;
+    use futures_util::StreamExt;
 
     use super::*;
 
-    #[async_std::test]
-    async fn test() {
-        let notify = Arc::new(Notify::new());
-        let notify2 = notify.clone();
+    #[test]
+    fn test() {
+        async_global_executor::block_on(async {
+            let notify = Arc::new(Notify::new());
+            let notify2 = notify.clone();
 
-        notify.notify();
+            async_global_executor::spawn(async move {
+                notify2.notify();
+                println!("sent notification");
+            })
+            .detach();
 
-        select! {
-            _ = notify2.notified().fuse() => (),
-            default => unreachable!("should be notified")
-        }
+            println!("received notification");
+            notify.notified().await;
+        })
     }
 
-    #[async_std::test]
-    async fn stream() {
-        let mut notify = Notify::new();
+    #[test]
+    fn stream() {
+        async_global_executor::block_on(async {
+            let notify = Arc::new(Notify::new());
+            let mut notify_stream = NotifyStream::new(notify.clone());
 
-        notify.notify();
+            async_global_executor::spawn(async move {
+                notify.notify();
+                println!("sent notification");
+            })
+            .detach();
 
-        assert!(notify.next().await.is_some());
+            notify_stream.next().await.unwrap();
+        })
     }
 }
