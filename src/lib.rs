@@ -57,10 +57,11 @@ pub struct Notify {
 
 /// Like tokio Notify, this is a runtime independent Notify.
 impl Notify {
-    pub fn new() -> Self {
+    /// Create a [`Notify`]
+    pub const fn new() -> Self {
         Self {
-            count: Default::default(),
-            event: Default::default(),
+            count: AtomicBool::new(false),
+            event: Event::new(),
         }
     }
 
