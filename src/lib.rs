@@ -49,7 +49,7 @@ use pin_project_lite::pin_project;
 ///    notify.notified().await;
 /// })
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Notify {
     count: AtomicBool,
     event: Event,
@@ -138,12 +138,6 @@ impl Notify {
         self.count
             .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
-    }
-}
-
-impl Default for Notify {
-    fn default() -> Notify {
-        Notify::new()
     }
 }
 
