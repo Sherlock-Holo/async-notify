@@ -125,6 +125,10 @@ impl Notify {
             let mut listener = pin!(listener);
             listener.as_mut().listen(&self.event);
 
+            if self.fast_path() {
+                return;
+            }
+
             listener.await;
         }
     }
@@ -159,6 +163,11 @@ impl<T: Deref<Target = Notify>> NotifyStream<T> {
             listener: None,
         }
     }
+
+    /// acquire the inner [`T`]
+    pub fn into_inner(self) -> T {
+        self.notify
+    }
 }
 
 impl<T: Deref<Target = Notify>> AsRef<Notify> for NotifyStream<T> {
@@ -176,20 +185,20 @@ impl<T: Deref<Target = Notify>> Stream for NotifyStream<T> {
 
         loop {
             if notify.fast_path() {
+                *this.listener = None;
+
                 return Poll::Ready(Some(()));
             }
 
-            let listener = match this.listener.as_mut() {
+            match this.listener.as_mut() {
                 None => {
                     let listener = notify.event.listen();
-                    this.listener.replace(listener);
-                    this.listener.as_mut().unwrap()
+                    *this.listener = Some(listener);
                 }
-                Some(listener) => listener,
-            };
-
-            ready!(listener.as_mut().poll(cx));
-            this.listener.take();
+                Some(listener) => {
+                    ready!(listener.as_mut().poll(cx));
+                }
+            }
         }
     }
 }
