@@ -2,11 +2,11 @@
 
 use std::future::Future;
 use std::ops::Deref;
-use std::pin::{pin, Pin};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
-use event_listener::{Event, EventListener};
+use event_listener::{Event, EventListener, listener};
 use futures_core::Stream;
 use pin_project_lite::pin_project;
 
@@ -122,9 +122,7 @@ impl Notify {
                 return;
             }
 
-            let listener = EventListener::new();
-            let mut listener = pin!(listener);
-            listener.as_mut().listen(&self.event);
+            listener!(self.event => listener);
 
             if self.fast_path() {
                 return;
@@ -146,13 +144,13 @@ pin_project! {
     pub struct NotifyStream<T: Deref<Target=Notify>> {
         #[pin]
         notify: T,
-        listener: Option<Pin<Box<EventListener>>>,
+        listener: Option<EventListener>,
     }
 }
 
 impl<T: Deref<Target = Notify>> NotifyStream<T> {
     /// Create [`NotifyStream`] from `T`
-    pub fn new(notify: T) -> Self {
+    pub const fn new(notify: T) -> Self {
         Self {
             notify,
             listener: None,
@@ -191,7 +189,7 @@ impl<T: Deref<Target = Notify>> Stream for NotifyStream<T> {
                     *this.listener = Some(listener);
                 }
                 Some(listener) => {
-                    ready!(listener.as_mut().poll(cx));
+                    ready!(Pin::new(listener).poll(cx));
                 }
             }
         }
@@ -202,7 +200,7 @@ impl<T: Deref<Target = Notify>> Stream for NotifyStream<T> {
 mod tests {
     use std::sync::Arc;
 
-    use futures_util::{select, FutureExt, StreamExt};
+    use futures_util::{FutureExt, StreamExt, select};
 
     use super::*;
 
