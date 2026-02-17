@@ -164,8 +164,10 @@ impl Notify {
     }
 
     fn fast_path(&self) -> bool {
+        // to support old version rustc
+        #[allow(deprecated)]
         self.count
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |c| c.checked_sub(1))
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| c.checked_sub(1))
             .is_ok()
     }
 }
